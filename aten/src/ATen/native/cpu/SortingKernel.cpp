@@ -96,12 +96,12 @@ struct KeyValueCompDesc {
 template <typename scalar_t>
 std::pair<scalar_t, scalar_t> get_min_max(const scalar_t* data, int64_t size) {
   using Vec = vec::Vectorized<vec::vec_scalar_t<scalar_t>>;
-  int num_threads = at::get_num_threads();
+  const int num_threads = at::get_num_threads();
   std::vector<scalar_t> min_per_thread(num_threads, std::numeric_limits<scalar_t>::max());
   std::vector<scalar_t> max_per_thread(num_threads, std::numeric_limits<scalar_t>::lowest());
 
   at::parallel_for(0, size, at::internal::GRAIN_SIZE / num_threads, [&](int64_t begin, int64_t end) {
-    int tid = at::get_thread_num();
+    const int tid = at::get_thread_num();
     const scalar_t* local_data = data + begin;
     const int64_t local_size = end - begin;
     const auto local_min_max = at::vec::reduce2_all(
@@ -155,9 +155,14 @@ static void parallel_sort1d_kernel(
         std::max(std::abs(min), std::abs(max)));
 
     const bool sorted_in_place = keys == sorted_keys;
+    const int num_threads = at::get_num_threads();
     if (!sorted_in_place) {
-      std::memcpy(keys, sorted_keys, values.numel() * values.itemsize());
-      std::memcpy(vals, sorted_vals, indices.numel() * indices.itemsize());
+      const auto common_size = values.numel();
+      at::parallel_for(0, common_size, at::internal::GRAIN_SIZE / num_threads, [&](int64_t begin, int64_t end) {
+        const auto job_size = end - begin;
+        vec::map([](vec::Vectorized<scalar_t> x) -> vec::Vectorized<scalar_t> { return x; }, keys + begin, sorted_keys + begin, job_size);
+        vec::map([](vec::Vectorized<int64_t> x) -> vec::Vectorized<int64_t> { return x; }, vals + begin, sorted_vals + begin, job_size);
+      });
     }
     if (min < 0) {
       // values like [2, 4, 1, -3, 8, -9, -5, 5] will be sorted as follows
@@ -203,8 +208,8 @@ static void sort_kernel(
   if (values.dim() == 1 && values.numel() >= at::internal::GRAIN_SIZE &&
       at::isIntegralType(values.scalar_type(), /*includeBool=*/false) &&
       is_radix_sort_available()) {
-    parallel_sort1d_kernel(values, indices, descending);
-    return;
+    // parallel_sort1d_kernel(values, indices, descending);
+    // return;
   }
   _dim_apply(
     values, indices, dim,
