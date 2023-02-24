@@ -14,7 +14,8 @@ std::pair<K*, V*> radix_sort_parallel(
     K* tmp_key_buf,
     V* tmp_value_buf,
     int64_t elements_count,
-    int64_t max_value) {
+    int64_t max_value,
+    bool maybe_with_neg_vals = false) {
   TORCH_CHECK(false, "radix_sort_parallel: ATen is not compiled with OpenMP support");
 }
 
@@ -45,6 +46,47 @@ namespace {
 // histogram size per thread
 constexpr int RDX_HIST_SIZE = 256;
 
+void combine_prefix_sum(
+    int nthreads,
+    int elements_count,
+    int* histogram,
+    int* histogram_ps) {
+  int sum = 0, prev_sum = 0;
+  for (int bins = 0; bins < RDX_HIST_SIZE; bins++) {
+    for (int t = 0; t < nthreads; t++) {
+      sum += histogram[t * RDX_HIST_SIZE + bins];
+      histogram_ps[t * RDX_HIST_SIZE + bins] = prev_sum;
+      prev_sum = sum;
+    }
+  }
+  histogram_ps[RDX_HIST_SIZE * nthreads] = prev_sum;
+  TORCH_CHECK(prev_sum == elements_count);
+}
+
+void combine_prefix_sum_for_neg_vals(
+    int nthreads,
+    int elements_count,
+    int* histogram,
+    int* histogram_ps) {
+  int sum = 0, prev_sum = 0;
+  for (int bins = 128; bins < RDX_HIST_SIZE; bins++) {
+    for (int t = 0; t < nthreads; t++) {
+      sum += histogram[t * RDX_HIST_SIZE + bins];
+      histogram_ps[t * RDX_HIST_SIZE + bins] = prev_sum;
+      prev_sum = sum;
+    }
+  }
+  for (int bins = 0; bins < 128; bins++) {
+    for (int t = 0; t < nthreads; t++) {
+      sum += histogram[t * RDX_HIST_SIZE + bins];
+      histogram_ps[t * RDX_HIST_SIZE + bins] = prev_sum;
+      prev_sum = sum;
+    }
+  }
+  histogram_ps[RDX_HIST_SIZE * (nthreads - 1) + 127] = prev_sum;
+  TORCH_CHECK(prev_sum == elements_count);
+}
+
 template <typename K, typename V>
 void radix_sort_kernel(
     K* input_keys,
@@ -54,9 +96,10 @@ void radix_sort_kernel(
     int elements_count,
     int* histogram,
     int* histogram_ps,
-    int pass) {
-  int tid = omp_get_thread_num();
-  int nthreads = omp_get_num_threads();
+    int pass,
+    bool with_special_pass = false) {
+  const int tid = omp_get_thread_num();
+  const int nthreads = omp_get_num_threads();
   int elements_count_4 = elements_count / 4 * 4;
 
   int* local_histogram = &histogram[RDX_HIST_SIZE * tid];
@@ -88,16 +131,11 @@ void radix_sort_kernel(
 #pragma omp barrier
   // Step 2: prefix sum
   if (tid == 0) {
-    int sum = 0, prev_sum = 0;
-    for (int bins = 0; bins < RDX_HIST_SIZE; bins++) {
-      for (int t = 0; t < nthreads; t++) {
-        sum += histogram[t * RDX_HIST_SIZE + bins];
-        histogram_ps[t * RDX_HIST_SIZE + bins] = prev_sum;
-        prev_sum = sum;
-      }
+    if (with_special_pass) {
+      combine_prefix_sum_for_neg_vals(nthreads, elements_count, histogram, histogram_ps);
+    } else {
+      combine_prefix_sum(nthreads, elements_count, histogram, histogram_ps);
     }
-    histogram_ps[RDX_HIST_SIZE * nthreads] = prev_sum;
-    TORCH_CHECK(prev_sum == elements_count);
   }
 #pragma omp barrier
 
@@ -149,8 +187,9 @@ std::pair<K*, V*> radix_sort_parallel(
     K* tmp_key_buf,
     V* tmp_value_buf,
     int64_t elements_count,
-    int64_t max_value) {
-  int maxthreads = omp_get_max_threads();
+    int64_t max_value,
+    bool maybe_with_neg_vals = false) {
+  const int maxthreads = omp_get_max_threads();
   std::unique_ptr<int []> histogram_tmp(new int[RDX_HIST_SIZE * maxthreads]);
   std::unique_ptr<int []> histogram_ps_tmp(new int[RDX_HIST_SIZE * maxthreads + 1]);
   int* histogram = histogram_tmp.get();
@@ -159,8 +198,12 @@ std::pair<K*, V*> radix_sort_parallel(
     return std::make_pair(inp_key_buf, inp_value_buf);
   }
 
-  // __builtin_clz is not portable
-  int num_bits = sizeof(K) * 8 - llvm::countLeadingZeros(static_cast<std::make_unsigned_t<K>>(max_value));
+  // if negative values are present, we want to perform all passes
+  // up to a sign bit
+  int num_bits = sizeof(K) * 8;
+  if (!maybe_with_neg_vals)
+    // __builtin_clz is not portable
+    num_bits -= llvm::countLeadingZeros(static_cast<std::make_unsigned_t<K>>(max_value));
   unsigned int num_passes = (num_bits + 7) / 8;
 
 #pragma omp parallel
@@ -179,7 +222,8 @@ std::pair<K*, V*> radix_sort_parallel(
           elements_count,
           histogram,
           histogram_ps,
-          pass);
+          pass,
+          maybe_with_neg_vals && pass == num_passes - 1);
 
       std::swap(input_keys, output_keys);
       std::swap(input_values, output_values);
