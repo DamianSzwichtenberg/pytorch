@@ -13,9 +13,10 @@
 #include <ATen/native/StridedRandomAccessor.h>
 #include <ATen/native/CompositeRandomAccessor.h>
 #include <ATen/native/TopKImpl.h>
-#include <ATen/native/cpu/radix_sort.h>
 #include <c10/core/WrapDimMinimal.h>
 #include <c10/util/irange.h>
+#include <fbgemm/Config.h>
+#include <fbgemm/Utils.h>
 
 namespace at::native {
 
@@ -102,7 +103,7 @@ static void parallel_sort1d_kernel(
     std::vector<int64_t> tmp_vals(elements);
     scalar_t* sorted_keys = nullptr;
     int64_t* sorted_vals = nullptr;
-    std::tie(sorted_keys, sorted_vals) = radix_sort_parallel(
+    std::tie(sorted_keys, sorted_vals) = fbgemm::radix_sort_parallel(
         keys,
         vals,
         tmp_keys.data(),
@@ -140,9 +141,10 @@ static void sort_kernel(
   }
   // TODO(dszwicht): Should we add here check for `stable` param?
   // Radix sort is a stable sorting algorithm.
-  if (values.dim() == 1 && values.numel() >= at::internal::GRAIN_SIZE &&
+  if (FBGEMM_PARALLEL_OPENMP && values.dim() == 1 &&
+      values.numel() >= at::internal::GRAIN_SIZE &&
       at::isIntegralType(values.scalar_type(), /*includeBool=*/false) &&
-      is_radix_sort_available() && !descending) {
+      !descending) {
     parallel_sort1d_kernel(values, indices);
     return;
   }
