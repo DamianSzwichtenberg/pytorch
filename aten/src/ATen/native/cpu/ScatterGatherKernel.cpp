@@ -12,6 +12,7 @@
 #include <ATen/cpu/vec/functional.h>
 #include <ATen/cpu/vec/vec.h>
 #include <c10/util/irange.h>
+#include <fbgemm/Utils.h>
 
 namespace at::native {
 
@@ -627,7 +628,7 @@ void cpu_scatter_reduce_expanded_index(const Tensor& self, const Tensor& index, 
 
   int64_t* sorted_col_index_keys = nullptr;
   int64_t* sorted_col_index_values = nullptr;
-  std::tie(sorted_col_index_keys, sorted_col_index_values) = radix_sort_parallel(
+  std::tie(sorted_col_index_keys, sorted_col_index_values) = fbgemm::radix_sort_parallel(
       keys.get(),
       values.get(),
       keys_tmp.get(),

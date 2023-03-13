@@ -6,7 +6,7 @@
 #include <ATen/core/Tensor.h>
 #include <ATen/native/DispatchStub.h>
 #include <ATen/native/ReductionType.h>
-#include <ATen/native/cpu/radix_sort.h>
+#include <fbgemm/Config.h>
 
 namespace at {
 struct TensorIterator;
@@ -55,7 +55,7 @@ static inline bool can_use_expanded_index_path(
     return false;
   }
 
-  if (!is_radix_sort_available()) {
+  if (!FBGEMM_PARALLEL_OPENMP) {
     return false;
   }
 
