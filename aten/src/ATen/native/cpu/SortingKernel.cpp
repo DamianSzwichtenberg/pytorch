@@ -15,7 +15,6 @@
 #include <ATen/native/TopKImpl.h>
 #include <c10/core/WrapDimMinimal.h>
 #include <c10/util/irange.h>
-#include <fbgemm/Config.h>
 #include <fbgemm/Utils.h>
 
 namespace at::native {
@@ -141,8 +140,8 @@ static void sort_kernel(
   }
   // TODO(dszwicht): Should we add here check for `stable` param?
   // Radix sort is a stable sorting algorithm.
-  if (FBGEMM_PARALLEL_OPENMP && values.dim() == 1 &&
-      values.numel() >= at::internal::GRAIN_SIZE &&
+  if (fbgemm::is_radix_sort_accelerated_with_openmp() &&
+      values.dim() == 1 && values.numel() >= at::internal::GRAIN_SIZE &&
       at::isIntegralType(values.scalar_type(), /*includeBool=*/false) &&
       !descending) {
     parallel_sort1d_kernel(values, indices);
