@@ -100,9 +100,7 @@ static void parallel_sort1d_kernel(
     int64_t* vals = indices.data_ptr<int64_t>();
     std::vector<scalar_t> tmp_keys(elements);
     std::vector<int64_t> tmp_vals(elements);
-    scalar_t* sorted_keys = nullptr;
-    int64_t* sorted_vals = nullptr;
-    std::tie(sorted_keys, sorted_vals) = fbgemm::radix_sort_parallel(
+    const auto [sorted_keys, sorted_vals] = fbgemm::radix_sort_parallel(
         keys,
         vals,
         tmp_keys.data(),
